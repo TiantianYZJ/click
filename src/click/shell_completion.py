@@ -523,7 +523,7 @@ class PowerShellComplete(ShellComplete):
     source_template: t.ClassVar[str] = _SOURCE_POWERSHELL
 
     def get_completion_args(self) -> tuple[list[str], str]:
-        cwords = split_arg_string(os.environ["COMP_WORDS"])
+        cwords = _split_arg_string_powershell(os.environ["COMP_WORDS"])
         cword = int(os.environ["COMP_CWORD"])
         args = cwords[1:cword]
 
@@ -629,6 +629,96 @@ def split_arg_string(string: str) -> list[str]:
         out.append(lex.token)
 
     return out
+
+
+def _split_arg_string_powershell(string: str) -> list[str]:
+    r"""Split a PowerShell command line into arguments.
+
+    PowerShell does not treat a backslash as an escape character, so
+    :func:`split_arg_string` would strip the path separators out of a
+    Windows path. Instead, a backtick escapes the next character. A
+    single-quoted string is literal, with ``''`` representing a quote,
+    while a double-quoted string treats a backtick as an escape and
+    ``""`` as a quote. Like :func:`split_arg_string`, an unfinished
+    quote does not fail, the partial token is used as-is.
+
+    .. code-block:: python
+
+        _split_arg_string_powershell(r"example C:\Temp\\")
+        ["example", "C:\\Temp\\\\"]
+
+    :param string: String to split.
+    """
+    args: list[str] = []
+    token: list[str] = []
+    started = False
+    quote: str | None = None
+    index = 0
+
+    while index < len(string):
+        char = string[index]
+        next_char = ""
+
+        if index + 1 < len(string):
+            next_char = string[index + 1]
+
+        if quote == "'":
+            if char == "'":
+                if next_char == "'":
+                    token.append("'")
+                    index += 2
+                    continue
+
+                quote = None
+            else:
+                token.append(char)
+        elif quote == '"':
+            if char == "`" and next_char:
+                token.append(next_char)
+                index += 2
+                continue
+
+            if char == '"':
+                if next_char == '"':
+                    token.append('"')
+                    index += 2
+                    continue
+
+                quote = None
+            else:
+                token.append(char)
+        elif char in " \t\r\n":
+            if started:
+                args.append("".join(token))
+                token = []
+                started = False
+        elif char == "'" or char == '"':
+            quote = char
+            started = True
+        elif char == "`" and next_char:
+            if next_char in "\r\n":
+                # A backtick before a line break continues the command, so
+                # the break is not a separator between arguments.
+                index += 2
+
+                if next_char == "\r" and string.startswith("\n", index):
+                    index += 1
+            else:
+                token.append(next_char)
+                index += 2
+                started = True
+
+            continue
+        else:
+            token.append(char)
+            started = True
+
+        index += 1
+
+    if started:
+        args.append("".join(token))
+
+    return args
 
 
 def _is_incomplete_argument(ctx: Context, param: Parameter) -> bool:

@@ -615,3 +615,50 @@ def test_powershell_format_completion_escapes_help():
     # produced by ZshComplete.
     item = CompletionItem("--at")
     assert pc.format_completion(item) == "plain\n--at\n_"
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [
+        ("cli", ["cli"]),
+        ("cli sub", ["cli", "sub"]),
+        # A backslash is a path separator, not an escape character.
+        (r"cli C:\Users\ann\doc", ["cli", r"C:\Users\ann\doc"]),
+        (r"cli C:\Temp\\", ["cli", r"C:\Temp\\"]),
+        # Quotes group a value and are removed.
+        (r'cli "C:\dir with space\x"', ["cli", r"C:\dir with space\x"]),
+        (r"cli 'C:\dir with space\x'", ["cli", r"C:\dir with space\x"]),
+        (r'cli --opt="a b"', ["cli", "--opt=a b"]),
+        # A doubled quote is one literal quote.
+        (r'cli "a""b"', ["cli", 'a"b']),
+        (r"cli 'it''s'", ["cli", "it's"]),
+        # A backtick escapes the next character.
+        ("cli ab`cd", ["cli", "abcd"]),
+        (r"cli ''", ["cli", ""]),
+        # A backtick before a line break continues the command.
+        ("cli `\nsub", ["cli", "sub"]),
+        ("cli ab`\ncd", ["cli", "abcd"]),
+        # An unfinished quote does not fail, the partial token is used.
+        (r'cli "C:\dir with space', ["cli", r"C:\dir with space"]),
+    ],
+)
+def test_powershell_split_arg_string(value, expect):
+    assert click.shell_completion._split_arg_string_powershell(value) == expect
+
+
+def test_powershell_complete_keeps_backslashes(monkeypatch):
+    def complete(ctx, param, incomplete):
+        return [CompletionItem(ctx.params["first"])]
+
+    cli = Command(
+        "cli",
+        params=[
+            Argument(["first"]),
+            Argument(["second"], shell_complete=complete),
+        ],
+    )
+    # The completion script sets COMP_WORDS to the command line as typed.
+    monkeypatch.setenv("COMP_WORDS", r"cli C:\Temp\\ ")
+    monkeypatch.setenv("COMP_CWORD", "2")
+    pc = PowerShellComplete(cli, {}, "cli", "_CLI_COMPLETE")
+    assert pc.complete() == "plain\nC:\\Temp\\\\\n_"
